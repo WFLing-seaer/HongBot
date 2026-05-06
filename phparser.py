@@ -27,7 +27,6 @@ from regex import escape
 from . import lexloaders
 from .cacheutil import Cache
 from .fontutil import fonts
-from .MLTrie import SourceEmptyError
 from .numutil import Value, numfmt, numify, numsify, numsimp
 from .randutil import rngs, rsgs
 from .textutil import find_outmost_bracket
@@ -165,6 +164,8 @@ async def translate(text: str, final: bool = False) -> SupportsStr:
                 except PosteriorReject:
                     CALL_STACK.pop()
                     continue
+        else:
+            field = epacse(field)
         fields[i] = field
         NESTED_INLINE_EPACSE = NIEPACSE_backup
     text_lst = []
@@ -1086,7 +1087,7 @@ async def Lex(mch: Match) -> SupportsStr:
         ret = await lexloaders.LexLoader.loaded[lex_name][length:pinyin]
     except lexloaders.UnsupportedOperation as e:
         return breakout(mch, "[E01填词失败]", f"{{d}} - 意外的填词失败：{repr(e)} (E01)")
-    except SourceEmptyError:
+    except lexloaders.EmptyResponse, lexloaders.PoolDrained:
         return breakout(mch, "[E62填词失败]", "{d} - 没有符合条件的词。(E62)")
 
     result_cache["Ret" : egroup(mch, "cname")] = ret

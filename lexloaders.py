@@ -12,7 +12,6 @@ from collections import OrderedDict, namedtuple
 from collections.abc import Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import chain
 from logging import getLogger
 from traceback import print_exc
 from typing import Any, Generic, Never, TypeVar, cast
@@ -25,8 +24,6 @@ import marisa_trie
 from anyio import Path
 from cachetools import Cache, TTLCache
 
-from .MLTrie import MLTrie, SourceEmptyError
-
 # from .pyparser import pyparse
 # from .pyutil import wsyll2mltrie
 from .textutil import glued
@@ -35,6 +32,14 @@ from .unitutil import byte2size, num2ch
 logger = getLogger("lexloader")
 
 T = TypeVar("T")
+
+
+class EmptyResponse(ValueError):
+    pass
+
+
+class PoolDrained(ValueError):
+    pass
 
 
 class UnsupportedFileType(ValueError):
@@ -87,7 +92,7 @@ class BatchedFunc(Generic[T]):
             try:
                 return next(spawned)
             except StopIteration:
-                raise SourceEmptyError
+                raise PoolDrained
 
     def __get__(self, obj, _=None):
         if obj is None:
@@ -136,27 +141,6 @@ class CacheHub:
 
 
 cache_hub = CacheHub()
-
-
-class Table:  # 暂未使用
-    # 列优先
-    class NotAligned(ValueError):
-        pass
-
-    def __init__(self, head: list[str] | None, data: list[list[Any]]):
-        self.head = head
-        self.data = data
-
-        rows = len(data[0])
-        for col in data:
-            if len(col) != rows:
-                raise Table.NotAligned
-
-        cols = len(data)
-        if head and (len(head) != cols):  # 如果每列的行数都相同，那么每行的列数也一定相同。因此此处只需要检查表头
-            raise Table.NotAligned
-
-        self.size = (rows, cols)
 
 
 class LexLoader(ABC):
@@ -231,74 +215,6 @@ class LexLoader(ABC):
 
     async def __contains__(self, *_) -> Never:
         raise TypeError("LexLoader不允许使用同步的in操作。应当使用异步的ll.contains(word)。")
-
-
-class LexLoader_mltwl(LexLoader):
-    Tname = glued("使用MLTrie的拼音反查词表")
-
-    @asyncache.cached(cache_hub(TTLCache(maxsize=1, ttl=120)))
-    async def data(self) -> MLTrie:
-        return MLTrie.loads(await self.path.read_bytes())
-
-    @asyncache.cached(Cache(maxsize=1))
-    async def get_datameta(self) -> LexLoader.DataMeta:
-        data = await self.data()
-        return LexLoader.DataMeta(memusage=data.get_memusage(), shape=(data.get_value_count(), 2), extra={})
-
-    @abatched(128, 32)
-    async def rand(self, num: int, length: int | None = None):
-        if length is None:
-            return (await self.data()).rand_unique_val(num)
-        return (await self.data()).rand_unique_val_at_layer(length * 3 - 1, num)
-        # 3: 查询所用的双拼，3字符（3层）对应一个字，因而length个字就对应length*3层，-1得到索引。
-
-    @abatched(128, 32)
-    async def get_by_req(self, num: int, request: str, length: int | None = None) -> list[str]:
-        raise UnsupportedOperation
-        trie = await self.data()
-
-        if request.endswith(("…", "...")):
-            # prefix模式
-            target_prefix = request.rstrip(".…")
-            reservoir: list[str] = []
-            count = 0
-            for word in trie.get_from_prefix_at_layer(target_prefix, length * 3 - 1) if length else trie.get_from_prefix(target_prefix):
-                if word in reservoir:
-                    continue
-                count += 1
-                if len(reservoir) < num:
-                    reservoir.append(word)
-                else:
-                    if (i := random.random() * count) < num:
-                        reservoir[int(i)] = word
-            random.shuffle(reservoir)
-            return reservoir
-
-        request = request.removeprefix("…").removeprefix("...")
-        is_tail = request.startswith(("…", "...")) or bool(length and length > len(request))
-        navs = trie.search(list(chain(*map(wsyll2mltrie, reversed(pyparse(request))))))
-        if is_tail:
-            if length:
-                length = min(length, len(request))
-                navs = trie.get_successor_from_batch(navs, length * 3 - 1)
-                result = trie.extract_unique_batch(navs, num)
-            else:
-                raise UnsupportedOperation
-        else:
-            result = trie.extract_unique_batch(navs, num)
-
-        return result
-
-    async def __getitem__(self, key: slice[int | None, str | None]) -> str:
-        length = key.start
-        request = key.stop
-
-        # if request is None:
-        return await self.rand(length=length)
-        return await self.get_by_req(request=request, length=length)
-
-    async def contains(self, key: str) -> bool:
-        return key in await self.data()
 
 
 class LexLoader_mrswl(LexLoader):
@@ -402,8 +318,6 @@ class LexLoader_csset(LexLoader_cset):
 def lexload(path: Path | str) -> LexLoader:
     path = Path(path)
     match path.suffix:
-        case ".mltwl":
-            return LexLoader_mltwl(path)
         case ".mrswl":
             return LexLoader_mrswl(path)
         case ".cset":
