@@ -19,9 +19,9 @@ from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
 import asyncache
-import bson
 import marisa_trie
 from anyio import Path
+from bson import BSON
 from cachetools import Cache, TTLCache
 
 # from .pyparser import pyparse
@@ -306,7 +306,7 @@ class LexLoader_csset(LexLoader_cset):
         try:
             self.bs
         except AttributeError:
-            self.bs = bson.decode(await self.path.read_bytes())
+            self.bs = BSON(await self.path.read_bytes()).decode()
             parent_name = self.bs["name"]
             self.parent = LexLoader.loaded[parent_name]
             self.start_idx = self.bs["start"]
@@ -330,7 +330,7 @@ def lexload(path: Path | str) -> LexLoader:
             # 注意: LexLoader中对于已创建的词库的引用是弱引用，因此不应当丢弃lexload的返回值
 
 
-default_load_directory = pathlib.Path("R:/Aha/modules/tianzi/lexicons/Lexicon_compiled/")
+default_load_directory = pathlib.Path("./tianzi_standalone/lexicons/Lexicon_compiled/")
 default_loaded_lexicons = []
 
 for file_path in default_load_directory.iterdir():
